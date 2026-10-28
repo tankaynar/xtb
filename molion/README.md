@@ -21,5 +21,7 @@ Each `molion-<commit>` release holds `xtb-<platform>.zip` (with its SHA-256) and
 from, at the revisions `subprojects/*.wrap` pin. xtb and the libraries linked into it are
 LGPL-3.0-or-later or more permissive; each zip carries every licence under `xtb/licenses/`.
 
-The program still reports itself as `xtb version 6.7.1 (130708f)`, upstream's version with the
-commit; `xtb/COMMIT.txt` in each zip names the commit too.
+The program reports upstream's version with the commit of this branch it was built from
+(`xtb version 6.7.1 (<commit>)`); `xtb/COMMIT.txt` in each zip names that commit in full.
+macOS and Linux builds use conda-forge's gfortran and OpenBLAS (Linux: glibc 2.17 or newer),
+Windows MSYS2's UCRT64 gfortran.
