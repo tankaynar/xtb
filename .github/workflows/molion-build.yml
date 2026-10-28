@@ -1,0 +1,186 @@
+# Builds this branch's xtb for Molion on macOS arm64, Linux x64 and Windows x64, each into one
+# folder that runs on its own (xtb/{bin,share,lib,licenses}), and publishes them as the assets
+# of a release, with the source they were built from.
+#
+# The xtb sources are upstream's, unchanged (see molion/README.md); the libraries xtb's meson
+# wraps pin (tblite, dftd4, mctc-lib, multicharge, CPCM-X, ...) are built from those pins and
+# linked in statically. macOS and Linux use conda-forge's gfortran and OpenBLAS, as Molion's
+# xtb 6.7.1 did (Linux: glibc 2.17 or newer); Windows uses MSYS2's UCRT64 gfortran. Each
+# bundle is checked on its own (molion/check.sh): a water single point, and IF5 and XeF6, on
+# which 6.7.1's `--esp` aborts at random, ten runs each.
+#
+# A push of a tag `molion-*` builds and makes that tag's release; a push to the branch only
+# builds.
+name: Molion build
+
+on:
+  push:
+    branches: [molion]
+    tags: ['molion-*']
+
+permissions:
+  contents: read
+
+jobs:
+  unix:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            platform: osx-arm64
+            tools: llvm-openmp
+          # The oldest supported image, for the oldest glibc
+          - os: ubuntu-22.04
+            platform: linux-x64
+            tools: patchelf
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: build
+          create-args: >-
+            -c conda-forge --override-channels
+            fortran-compiler c-compiler meson ninja pkg-config git
+            libblas=*=*openblas liblapack ${{ matrix.tools }}
+          init-shell: bash
+
+      - name: Build
+        shell: bash -el {0}
+        run: |
+          meson setup _build --prefix="$CONDA_PREFIX" --libdir=lib --buildtype=release \
+            --warnlevel=0 -Ddefault_library=static -Dbuild_name=molion -Dlapack=netlib
+          meson compile -C _build
+          meson install -C _build --no-rebuild
+
+      - name: Unit tests
+        shell: bash -el {0}
+        env:
+          OMP_NUM_THREADS: 2,1
+        run: meson test -C _build --no-rebuild --print-errorlogs -t 120 --suite xtb
+
+      - name: Bundle
+        shell: bash -el {0}
+        run: |
+          python molion/bundle.py --prefix "$CONDA_PREFIX" --out dist
+          bash molion/licences.sh dist/xtb/licenses
+          git rev-parse HEAD > dist/xtb/COMMIT.txt
+
+      - name: Runs from the bundle alone
+        run: env -i HOME="$HOME" PATH=/usr/bin:/bin bash molion/check.sh "$PWD/dist/xtb/bin/xtb"
+
+      - name: Package
+        run: |
+          (cd dist && zip -r -9 -y ../xtb-${{ matrix.platform }}.zip xtb)
+          shasum -a 256 xtb-${{ matrix.platform }}.zip | tee xtb-${{ matrix.platform }}.zip.sha256
+          if [ "$RUNNER_OS" = Linux ]; then
+            echo "glibc needed:"; objdump -T dist/xtb/bin/xtb dist/xtb/lib/* | grep -oE 'GLIBC_[0-9.]+' | sort -Vu | tail -1
+          fi
+          du -sh dist/xtb xtb-${{ matrix.platform }}.zip
+
+      # The source of the release: this tree with every subproject it was built from
+      - name: Source
+        if: matrix.platform == 'linux-x64'
+        shell: bash -el {0}
+        run: |
+          meson dist -C _build --no-tests --include-subprojects --allow-dirty
+          mv _build/meson-dist/xtb-*.tar.xz xtb-source.tar.xz
+          shasum -a 256 xtb-source.tar.xz | tee xtb-source.tar.xz.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtb-${{ matrix.platform }}
+          retention-days: 3
+          path: |
+            xtb-*.zip
+            xtb-*.sha256
+            xtb-source.tar.xz
+
+  windows:
+    name: win-x64
+    runs-on: windows-latest
+    timeout-minutes: 90
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: false
+          install: >-
+            git zip
+            mingw-w64-ucrt-x86_64-gcc-fortran
+            mingw-w64-ucrt-x86_64-openblas
+            mingw-w64-ucrt-x86_64-lapack
+            mingw-w64-ucrt-x86_64-meson
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-pkgconf
+
+      # xtb needs a larger stack than Windows's default 1 MB (as conda-forge's build sets)
+      - name: Build
+        run: |
+          meson setup _build --prefix="$PWD/stage" --buildtype=release --warnlevel=0 \
+            -Ddefault_library=static -Dbuild_name=molion -Dlapack=netlib \
+            -Dfortran_link_args=-Wl,--stack=16777216 -Dc_link_args=-Wl,--stack=16777216
+          meson compile -C _build
+          meson install -C _build --no-rebuild
+
+      - name: Unit tests
+        env:
+          OMP_NUM_THREADS: 1
+        run: meson test -C _build --no-rebuild --print-errorlogs -t 120 --suite xtb
+
+      # Windows looks beside a program first, so its DLLs go in bin/
+      - name: Bundle
+        run: |
+          mkdir -p dist/xtb/bin dist/xtb/share
+          cp stage/bin/xtb.exe dist/xtb/bin/
+          cp -r stage/share/xtb dist/xtb/share/
+          ldd dist/xtb/bin/xtb.exe | awk '/ucrt64/ {print $3}' | sort -u | xargs -r -I{} cp {} dist/xtb/bin/
+          ls dist/xtb/bin
+          bash molion/licences.sh dist/xtb/licenses
+          git rev-parse HEAD > dist/xtb/COMMIT.txt
+
+      # Only Windows's own folders on PATH, so a DLL left behind fails here
+      - name: Runs from the bundle alone
+        run: PATH=/usr/bin:/c/Windows/System32:/c/Windows bash molion/check.sh "$PWD/dist/xtb/bin/xtb.exe"
+
+      - name: Package
+        run: |
+          (cd dist && zip -r -9 ../xtb-win-x64.zip xtb)
+          sha256sum xtb-win-x64.zip | tee xtb-win-x64.zip.sha256
+          du -sh dist/xtb xtb-win-x64.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtb-win-x64
+          retention-days: 3
+          path: |
+            xtb-*.zip
+            xtb-*.sha256
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/molion-')
+    needs: [unix, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          merge-multiple: true
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -l
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes "xtb built for Molion from upstream commit $(echo "$GITHUB_REF_NAME" | sed 's/^molion-//'), unchanged; see molion/README.md on this tag. xtb-source.tar.xz is the source of every build here, its subprojects included." \
+            xtb-*.zip xtb-*.sha256 xtb-source.tar.xz
