@@ -87,8 +87,8 @@ tester = executable(
   link_language: 'fortran',
 )
 
-# run test suites writing/deleting the same LMO and Molden output files serially
-serial_tests = ['gfn2', 'iff', 'tblite']
+# run test suites writing/deleting the same LMO, Molden, COSMO, and charge files serially
+serial_tests = ['gfn1', 'gfn2', 'gfnff', 'iff', 'tblite', 'cpx']
 foreach t : tests
   test(t, tester, args: t, suite: 'unit', env: xtbenv, is_parallel: t not in serial_tests)
 endforeach
@@ -103,6 +103,14 @@ test('Argparser no arguments', xtb_exe, should_fail: true, env: xtbenv)
 test('GFN2-FF xcontrol', xtb_exe, env: xtbenv, args: [
   '--coffee', '--strict', '--norestart', '--namespace', 'test7',
   '--input', files('../inputs/gfnff.inp'),
+])
+test('Reject native periodic GFN1', xtb_exe, should_fail: true, env: xtbenv, args: [
+  files('../../assets/inputs/vasp/ammonia.vasp'), '--gfn', '1',
+  '--norestart', '--namespace', 'pbc_native_gfn1',
+])
+test('Reject native periodic GFN2', xtb_exe, should_fail: true, env: xtbenv, args: [
+  files('../../assets/inputs/vasp/ammonia.vasp'), '--gfn', '2',
+  '--norestart', '--namespace', 'pbc_native_gfn2',
 ])
 if tblite_dep.found()
   # ONIOM with tblite

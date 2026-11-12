@@ -30,7 +30,10 @@ subroutine collect_molecule(testsuite)
 
    testsuite = [ &
       new_unittest("mic-distances", test_class_molecule_mic_distances), &
-      new_unittest("axis-trafo", test_class_molecule_axis_trafo) &
+      new_unittest("axis-trafo", test_class_molecule_axis_trafo), &
+      new_unittest("xyz-writer-nonpbc", test_xyz_writer_nonpbc), &
+      new_unittest("xyz-writer-pbc", test_xyz_writer_pbc), &
+      new_unittest("update-nowrap-pbc", test_update_nowrap_pbc) &
       ]
 
 end subroutine collect_molecule
@@ -140,5 +143,137 @@ subroutine test_class_molecule_axis_trafo(error)
    call mol%deallocate
 
 end subroutine test_class_molecule_axis_trafo
+
+subroutine test_xyz_writer_nonpbc(error)
+   use mctc_io, only : structure_type
+   use xtb_io_writer, only : writeMolecule
+   use xtb_mctc_accuracy, only : wp
+   use xtb_mctc_filetypes, only : fileType
+   use xtb_type_molecule, only : TMolecule, init, assignment(=)
+   type(error_type), allocatable, intent(out) :: error
+
+   integer, parameter :: nat = 3
+   integer, parameter :: at(nat) = [8, 1, 1]
+   real(wp), parameter :: xyz(3, nat) = reshape([ &
+      &  0.0000000_wp,  0.0000000_wp,  0.2216670_wp, &
+      &  0.0000000_wp,  1.4309280_wp, -0.8866680_wp, &
+      &  0.0000000_wp, -1.4309280_wp, -0.8866680_wp], [3, nat])
+
+   type(TMolecule) :: mol
+   type(structure_type) :: struc
+   integer :: unit
+   character(len=256) :: line1, line2
+
+   call init(mol, at, xyz)
+   struc = mol
+
+   call check(error, size(struc%lattice), 0)
+   if (allocated(error)) return
+   call check(error, any(struc%periodic), .false.)
+   if (allocated(error)) return
+
+   open(newunit=unit, status='scratch')
+   call writeMolecule(mol, unit, format=fileType%xyz)
+   rewind(unit)
+   read(unit, '(a)') line1
+   read(unit, '(a)') line2
+   close(unit)
+
+   call check(error, index(line2, 'Lattice='), 0)
+   if (allocated(error)) return
+   call check(error, index(line2, 'pbc='), 0)
+   if (allocated(error)) return
+   call check(error, index(line2, 'Properties='), 0)
+   if (allocated(error)) return
+
+   call mol%deallocate
+
+end subroutine test_xyz_writer_nonpbc
+
+subroutine test_xyz_writer_pbc(error)
+   use mctc_io, only : structure_type
+   use xtb_io_writer, only : writeMolecule
+   use xtb_mctc_accuracy, only : wp
+   use xtb_mctc_filetypes, only : fileType
+   use xtb_type_molecule, only : TMolecule, init, assignment(=)
+   type(error_type), allocatable, intent(out) :: error
+
+   integer, parameter :: nat = 2
+   integer, parameter :: at(nat) = [1, 8]
+   real(wp), parameter :: xyz(3, nat) = reshape([ &
+      & 0.0_wp, 0.0_wp, 0.0_wp, &
+      & 1.0_wp, 1.0_wp, 1.0_wp], [3, nat])
+   real(wp), parameter :: lattice(3, 3) = reshape([ &
+      & 10.0_wp,  0.0_wp,  0.0_wp, &
+      &  0.0_wp, 10.0_wp,  0.0_wp, &
+      &  0.0_wp,  0.0_wp, 10.0_wp], [3, 3])
+
+   type(TMolecule) :: mol
+   type(structure_type) :: struc
+   integer :: unit
+   character(len=512) :: line1, line2
+
+   call init(mol, at, xyz, lattice=lattice)
+   struc = mol
+
+   call check(error, size(struc%lattice), 9)
+   if (allocated(error)) return
+   call check(error, all(struc%periodic), .true.)
+   if (allocated(error)) return
+
+   open(newunit=unit, status='scratch')
+   call writeMolecule(mol, unit, format=fileType%xyz)
+   rewind(unit)
+   read(unit, '(a)') line1
+   read(unit, '(a)') line2
+   close(unit)
+
+   call check(error, index(line2, 'Lattice=') > 0, .true.)
+   if (allocated(error)) return
+   call check(error, index(line2, 'pbc="T T T"') > 0, .true.)
+   if (allocated(error)) return
+
+   call mol%deallocate
+
+end subroutine test_xyz_writer_pbc
+
+subroutine test_update_nowrap_pbc(error)
+   use xtb_mctc_accuracy, only : wp
+   use xtb_type_molecule, only : TMolecule, init
+   type(error_type), allocatable, intent(out) :: error
+   real(wp), parameter :: thr = 1.0e-12_wp
+   integer, parameter :: nat = 2
+   integer, parameter :: at(nat) = [1, 8]
+   real(wp), parameter :: xyz(3, nat) = reshape([ &
+      & 1.0_wp, 2.0_wp, 3.0_wp, &
+      & 4.0_wp, 5.0_wp, 6.0_wp], [3, nat])
+   real(wp), parameter :: lattice(3, 3) = reshape([ &
+      & 10.0_wp,  0.0_wp,  0.0_wp, &
+      &  0.0_wp, 10.0_wp,  0.0_wp, &
+      &  0.0_wp,  0.0_wp, 10.0_wp], [3, 3])
+   type(TMolecule) :: mol
+
+   call init(mol, at, xyz, lattice=lattice)
+   mol%xyz(1, 1) = -1.5_wp
+   mol%lattice = 12.0_wp * reshape([ &
+      & 1.0_wp, 0.0_wp, 0.0_wp, &
+      & 0.0_wp, 1.0_wp, 0.0_wp, &
+      & 0.0_wp, 0.0_wp, 1.0_wp], [3, 3])
+
+   call mol%update(wrap=.false.)
+   call check(error, mol%xyz(1, 1), -1.5_wp, thr=thr)
+   if (allocated(error)) return
+   call check(error, mol%abc(1, 1), 0.875_wp, thr=thr)
+   if (allocated(error)) return
+   call check(error, mol%cellpar(1), 12.0_wp, thr=thr)
+   if (allocated(error)) return
+   call check(error, mol%volume, 1728.0_wp, thr=thr)
+   if (allocated(error)) return
+
+   call mol%update
+   call check(error, mol%xyz(1, 1), 10.5_wp, thr=thr)
+
+   call mol%deallocate
+end subroutine test_update_nowrap_pbc
 
 end module test_molecule

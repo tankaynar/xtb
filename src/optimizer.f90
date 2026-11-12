@@ -138,6 +138,7 @@ subroutine ancopt(env,ilog,mol,chk,calc, &
    use xtb_setmod, only : int2optlevel
 
    use xtb_hessian, only : trproj,rdhess
+   use xtb_freq_project, only : projectFixedAtoms, fixedAtomModes
    use xtb_readin
    use xtb_lsrmsd
 
@@ -330,6 +331,8 @@ subroutine ancopt(env,ilog,mol,chk,calc, &
    maxmicro=set%optset%micro_opt       ! def: 20 
    estart = etot
    call get_optthr(mol%n,tight,ethr,gthr,maxopt,acc)
+   if (set%acc_set) acc = set%acc
+   calc%accuracy = acc
    
    ! if provided by user !
    if(maxcycle_in.gt.0)then
@@ -366,8 +369,13 @@ subroutine ancopt(env,ilog,mol,chk,calc, &
 
    ! exact fixing case ! 
    if(fixset%n.gt.0) then 
-      nvar = nat3 - 3*fixset%n - 3
-      if(nvar.le.0) nvar=1
+      nvar = nat3 - fixedAtomModes(mol, fixset%atoms(:fixset%n))
+   endif
+
+   ! all coordinates are fixed, nothing to optimize !
+   if(nvar.eq.0) then
+      if(pr) write(env%unit,'(/,3x,a)') "all atoms are fixed, skipping optimization"
+      return
    endif
 
    ! adjust if restrated !
@@ -498,7 +506,7 @@ subroutine ancopt(env,ilog,mol,chk,calc, &
    ! project out translational and rotational modes !
    if(modef.eq.0)then
       if(fixset%n.gt.0)then
-         call trproj(molopt%n,nat3,molopt%xyz,fc,.false., -1  ,pmode,1)     ! exact fixing
+         call projectFixedAtoms(fc,molopt,fixset%atoms(:fixset%n))        ! exact fixing
       else
          if (.not.linear) &
          call trproj(molopt%n,nat3,molopt%xyz,fc,.false.,modef,pmode,1)     ! normal
@@ -532,7 +540,8 @@ subroutine ancopt(env,ilog,mol,chk,calc, &
    if (profile) call timer%measure(3,'ANC generation') ! start timer for ANC generation   
 
    ! diagonalize Hessian and sort eigenvalues !
-   call anc%new(env%unit,molopt%xyz,h,pr,linear)  
+   ! with fixed atoms the null space is already projected exactly !
+   call anc%new(env%unit,molopt%xyz,h,pr,linear,rigid=fixset%n == 0)
    if (profile) call timer%measure(3) ! stop timer for ANC generation
    esave = etot ! save energy 
 
@@ -542,6 +551,7 @@ subroutine ancopt(env,ilog,mol,chk,calc, &
    call relax(env,iter,molopt,anc,restart,maxmicro,maxdispl,ethr,gthr, &
       & iii,chk,calc,egap,acc,et,maxiter,iupdat,etot,g,sigma,ilog,pr,fail, &
       & converged,timer,set%optset%exact_rf,avconv)
+   calc%accuracy = acc
 
    ! check for errors !
    call env%check(fail)
@@ -631,6 +641,7 @@ subroutine relax(env,iter,mol,anc,restart,maxcycle,maxdispl,ethr,gthr, &
    use xtb_type_calculator
    use xtb_type_data
    use xtb_type_timer
+   use xtb_setparam, only : set
 
    implicit none
 
@@ -781,6 +792,7 @@ subroutine relax(env,iter,mol,anc,restart,maxcycle,maxdispl,ethr,gthr, &
    ! single point + analytical gradients !
    if (profile) call timer%measure(5,'single point calculation')
    g = 0.0_wp
+   calc%accuracy = acc
    call calc%singlepoint(env,mol,chk,prlevel,iter.eq.1,energy,g,sigma,egap,res)
    if (profile) call timer%measure(5)
    
@@ -830,12 +842,14 @@ subroutine relax(env,iter,mol,anc,restart,maxcycle,maxdispl,ethr,gthr, &
    end if
 
    ! adjust SCC accuracy dynamically !
-   if(gnorm    .lt.0.004)then
-      acc=acc_in
-   elseif(gnorm.lt.0.02)then
-      acc=3.0d0*acc_in
-   elseif(gnorm.gt.0.02)then
-      acc=6.0d0*acc_in
+   if (.not. set%acc_set) then
+      if(gnorm    .lt.0.004)then
+         acc=acc_in
+      elseif(gnorm.lt.0.02)then
+         acc=3.0d0*acc_in
+      elseif(gnorm.gt.0.02)then
+         acc=6.0d0*acc_in
+      endif
    endif
 
    first =.false. ! distinguish between first and subsequent iterations

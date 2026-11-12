@@ -297,7 +297,8 @@ subroutine write_set_hess(ictrl)
    implicit none
    integer,intent(in) :: ictrl
    write(ictrl,'(a,"hess")') flag
-   write(ictrl,'(3x,"sccacc=",g0)') set%accu_hess
+   if (allocated(set%accu_hess)) &
+      write(ictrl,'(3x,"sccacc=",g0)') set%accu_hess
    write(ictrl,'(3x,"step=",g0)') set%step_hess
    write(ictrl,'(3x,"scale=",g0)') set%scale_hess
    write(ictrl,'(3x,"imagmin=",g0)') set%imagmin_hess
@@ -2201,8 +2202,9 @@ subroutine set_hess(env,key,val)
    case('element mass','modify mass','isotope','scale mass')
       call colon_only_error(env,'hess',key,val,source)
    case('sccacc')
-      if (getValue(env,val,ddum).and.set1) set%accu_hess = ddum
-      set1 = .false.
+      if (getValue(env,val,ddum)) then
+         if (.not.allocated(set%accu_hess)) set%accu_hess = ddum
+      end if
    case('step')
       if (getValue(env,val,ddum).and.set2) set%step_hess = ddum
       set2 = .false.
@@ -2543,7 +2545,7 @@ subroutine set_fix(env,key,val)
    select case(key)
    case default ! do nothing
       call env%warning("the key '"//key//"' is not recognized by fix",source)
-   case('elements','atoms','freeze','shake')
+   case('elements','atoms','free','freeze','shake')
       call colon_only_error(env,'fix',key,val,source)
    case('freeze frequency')
       if (getValue(env,val,ddum).and.set1) freezeset%fc = ddum
@@ -2571,8 +2573,8 @@ subroutine set_constr(env,key,val)
    select case(key)
    case default ! do nothing
       call env%warning("the key '"//key//"' is not recognized by constrain",source)
-   case('elements','atoms','DISTANCE','ANGLE','DIHEDRAL','distance','angle', &
-         & 'dihedral','center','cma','cma interface','z')
+   case('elements','atoms','free','DISTANCE','ANGLE','DIHEDRAL','distance', &
+         & 'angle','dihedral','center','cma','cma interface','z')
       call colon_only_error(env,'constrain',key,val,source)
    case('force constant')
       if (getValue(env,val,ddum).and.set1) fcconstr = ddum

@@ -642,6 +642,9 @@ subroutine test_gfn1_pbc3d(error)
    real(wp),allocatable :: gradient(:,:)
    real(wp),allocatable :: xyz(:,:)
 
+   logical :: exitRun
+   character(len=:), allocatable :: err_msg
+
    ! setup the environment variables
    call init(env)
 
@@ -657,20 +660,19 @@ subroutine test_gfn1_pbc3d(error)
    call mctc_mute
 
    call newXTBCalculator(env, mol, calc, 'param_gfn1-xtb.txt', 1)
-   call newWavefunction(env, mol, calc, wfn)
+   call env%check(exitRun)
+   call check_(error, exitRun, .true.)
+   if (allocated(error)) return
 
-   call calc%singlepoint(env, mol, wfn, 2, .false., energy, gradient, sigma, &
-      & hl_gap, res)
-
-   call check_(error, hl_gap, 7.5303554532198_wp, thr=thr)
-   call check_(error, energy,-11.069440027133_wp, thr=thr)
-   call check_(error, norm2(gradient), 0.28766535013323E-01_wp, thr=thr)
-
-   call check_(error, gradient(1,1),-0.18972772349541E-03_wp, thr=thr)
-   call check_(error, gradient(1,2),-0.66834823084326E-02_wp, thr=thr)
-   call check_(error, gradient(1,3), 0.68732100319280E-02_wp, thr=thr)
-   call check_(error, gradient(2,1),-0.26831551972435E-03_wp, thr=thr)
-   call check_(error, gradient(3,3), 0.16835857473202E-01_wp, thr=thr)
+   call env%getLog(err_msg)
+   if (index(err_msg, "Native periodic GFN1-xTB and GFN2-xTB calculations are deprecated and unsupported") == 0) then
+      call test_failed(error, "Missing deprecation message for native periodic GFN1-xTB")
+      return
+   end if
+   if (index(err_msg, "--tblite") == 0) then
+      call test_failed(error, "Error message does not recommend --tblite")
+      return
+   end if
 
 end subroutine test_gfn1_pbc3d
 
@@ -937,6 +939,7 @@ end subroutine test_ipea_indole
 
 subroutine test_gfn1_mindless_cosmo(error)
    use xtb_mctc_accuracy, only : wp
+   use xtb_mctc_global, only : persistentEnv
    use xtb_test_molstock, only : getMolecule
 
    use xtb_type_molecule
@@ -988,6 +991,7 @@ subroutine test_gfn1_mindless_cosmo(error)
       & 1.391454451911_wp]
 
    call init(env)
+   persistentEnv%io%namespace = 'gfn1_cosmo'
    do iMol = 1,10
 
       call getMolecule(mol, mindless(iMol))
@@ -1016,6 +1020,8 @@ subroutine test_gfn1_mindless_cosmo(error)
       call check_(error, hl_gap, ref_hlgaps(iMol), thr=thr)
 
    end do
+   call delete_file('xtb.cosmo')
+   deallocate(persistentEnv%io%namespace)
 
 end subroutine test_gfn1_mindless_cosmo
 

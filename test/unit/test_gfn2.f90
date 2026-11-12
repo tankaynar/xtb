@@ -35,6 +35,8 @@ subroutine collect_gfn2(testsuite)
       new_unittest("translation", test_gfn2_translation), &
       new_unittest("gbsa", test_gfn2gbsa_api), &
       new_unittest("salt", test_gfn2salt_api), &
+      new_unittest("born-asymmetric-overlap", test_born_asymmetric_overlap), &
+      new_unittest("reference-state", test_gfn2_reference_state), &
       new_unittest("pcem", test_gfn2_pcem_api), &
       new_unittest("pcem_io", test_gfn2_pcem_io), &
       new_unittest("mindless-basic", test_gfn2_mindless_basic), &
@@ -42,7 +44,8 @@ subroutine collect_gfn2(testsuite)
       new_unittest("dmetal", test_gfn2_dmetal), &
       new_unittest("mindless-cosmo", test_gfn2_mindless_cosmo), &
       new_unittest("wbo", test_gfn2_wbo), &
-      new_unittest("lmo-molden", test_gfn2_lmo_molden) &
+      new_unittest("lmo-molden", test_gfn2_lmo_molden), &
+      new_unittest("pbc3d", test_gfn2_pbc3d) &
       ]
 
 end subroutine collect_gfn2
@@ -206,7 +209,7 @@ subroutine test_gfn2_api(error)
    type(TRestart) :: chk
    type(TEnvironment) :: env
    type(scc_results) :: res
-   type(TxTBCalculator) :: calc
+   type(TxTBCalculator) :: calc0, calc
 
    real(wp) :: energy, sigma(3, 3)
    real(wp) :: hl_gap
@@ -220,6 +223,9 @@ subroutine test_gfn2_api(error)
    allocate(gradient(3,mol%n))
    energy = 0.0_wp
    gradient = 0.0_wp
+
+   ! Ensure loading GFN0-xTB does not overwrite global D4 reference charges
+   call newXTBCalculator(env, mol, calc0, method=0)
 
    call newXTBCalculator(env, mol, calc, method=2)
    call newWavefunction(env, mol, calc, chk)
@@ -533,6 +539,173 @@ subroutine test_gfn2salt_api(error)
    call check_(error, gradient(3,7), 0.6883271590152e-02_wp, thr=thr)
 
 end subroutine test_gfn2salt_api
+
+subroutine test_born_asymmetric_overlap(error)
+   use xtb_mctc_accuracy, only : wp
+   use xtb_mctc_convert, only : aatoau
+   use xtb_type_environment, only : TEnvironment, init
+   use xtb_type_molecule, only : TMolecule, init
+   use xtb_solv_gbsa, only : TBorn
+   use xtb_solv_input, only : TSolvInput
+   use xtb_solv_kernel, only : gbKernel
+   use xtb_solv_model, only : TSolvModel, init, newBornModel
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   real(wp), parameter :: step = 1.0e-5_wp
+   real(wp), parameter :: thr2 = sqrt(epsilon(1.0_wp))
+   integer, parameter :: nat = 3, num(nat) = [1, 8, 55], order(nat) = [3, 2, 1]
+   real(wp), parameter :: xyz(3, nat) = reshape([&
+      & 0.0_wp, 0.0_wp, -0.96_wp, &
+      & 0.0_wp, 0.0_wp,  0.00_wp, &
+      & 0.0_wp, 0.0_wp,  2.08_wp], [3, nat]) * aatoau
+
+   type(TEnvironment) :: env
+   type(TMolecule) :: mol, reversed
+   type(TSolvInput) :: input
+   type(TSolvModel) :: model
+   type(TBorn) :: gbsa, reversed_gbsa
+   real(wp) :: rad(nat), reversed_rad(nat), sr(nat), sl(nat)
+   real(wp) :: draddr(3, nat, nat), reversed_draddr(3, nat, nat)
+   real(wp) :: numg(3, nat, nat), reversed_numg(3, nat, nat)
+   integer :: iat, ic
+   logical :: exitRun
+
+   call init(env)
+   call init(mol, num, xyz)
+   call init(reversed, num(order), xyz(:, order))
+
+   input = TSolvInput(solvent="water", alpb=.true., kernel=gbKernel%p16)
+   call init(model, env, input, 2)
+   call env%check(exitRun)
+   call check_(error, .not.exitRun)
+   if (allocated(error)) return
+
+   call newBornModel(model, env, gbsa, mol%at)
+   call newBornModel(model, env, reversed_gbsa, reversed%at)
+
+   call gbsa%update(env, mol%at, mol%xyz)
+   rad = gbsa%brad
+   draddr = gbsa%brdr
+
+   call reversed_gbsa%update(env, reversed%at, reversed%xyz)
+   reversed_rad = reversed_gbsa%brad
+   reversed_draddr = reversed_gbsa%brdr
+
+   if (any(abs(rad - reversed_rad(order)) > thr2)) then
+      call test_failed(error, "Born radii depend on atom order")
+      return
+   end if
+   if (any(abs(draddr - reversed_draddr(:, order, order)) > thr2)) then
+      call test_failed(error, "Born radii derivatives depend on atom order")
+      return
+   end if
+
+   do iat = 1, nat
+      do ic = 1, 3
+         mol%xyz(ic, iat) = mol%xyz(ic, iat) + step
+         call gbsa%update(env, mol%at, mol%xyz)
+         sr = gbsa%brad
+
+         mol%xyz(ic, iat) = mol%xyz(ic, iat) - 2*step
+         call gbsa%update(env, mol%at, mol%xyz)
+         sl = gbsa%brad
+
+         mol%xyz(ic, iat) = mol%xyz(ic, iat) + step
+         numg(ic, iat, :) = 0.5_wp * (sr - sl) / step
+
+         reversed%xyz(ic, iat) = reversed%xyz(ic, iat) + step
+         call reversed_gbsa%update(env, reversed%at, reversed%xyz)
+         sr = reversed_gbsa%brad
+
+         reversed%xyz(ic, iat) = reversed%xyz(ic, iat) - 2*step
+         call reversed_gbsa%update(env, reversed%at, reversed%xyz)
+         sl = reversed_gbsa%brad
+
+         reversed%xyz(ic, iat) = reversed%xyz(ic, iat) + step
+         reversed_numg(ic, iat, :) = 0.5_wp * (sr - sl) / step
+      end do
+   end do
+
+   if (any(abs(numg - draddr) > thr2) .or. &
+      & any(abs(reversed_numg - reversed_draddr) > thr2)) then
+      call test_failed(error, "Born radii derivative does not match finite difference solution")
+   end if
+
+end subroutine test_born_asymmetric_overlap
+
+subroutine test_gfn2_reference_state(error)
+   use xtb_mctc_accuracy, only : wp
+   use xtb_type_environment, only : TEnvironment, init
+   use xtb_type_molecule, only : TMolecule, init
+   use xtb_type_restart, only : TRestart
+   use xtb_type_data, only : scc_results
+   use xtb_xtb_calculator, only : TxTBCalculator, newXTBCalculator, newWavefunction
+   use xtb_main_setup, only : addSolvationModel
+   use xtb_solv_input, only : TSolvInput
+   use xtb_solv_kernel, only : gbKernel
+   use xtb_solv_model, only : TSolvModel, init
+   use xtb_solv_state, only : solutionState
+
+   !> Error handling
+   type(error_type), allocatable, intent(out) :: error
+
+   real(wp), parameter :: thr = 1.0e-10_wp
+   integer, parameter :: nat = 3
+   integer, parameter :: at(nat) = [8, 1, 1]
+   real(wp), parameter :: xyz(3, nat) = reshape([&
+      & 0.00000000000000_wp,  0.00000000000000_wp, -0.73578586109551_wp, &
+      & 1.44183152868459_wp,  0.00000000000000_wp,  0.36789293054775_wp, &
+      &-1.44183152868459_wp,  0.00000000000000_wp,  0.36789293054775_wp], &
+      & shape(xyz))
+   integer, parameter :: states(3) = [&
+      & solutionState%gsolv, solutionState%mol1bar, solutionState%reference]
+   real(wp), parameter :: ref_shifts(3) = [&
+      & 0.00108075969814_wp, 0.00411200603421_wp, 0.00790515518707_wp]
+
+   type(TEnvironment) :: env
+   type(TMolecule) :: mol
+   type(TRestart) :: chk
+   type(TxTBCalculator) :: calc
+   type(TSolvModel) :: model
+   type(scc_results) :: res
+   real(wp) :: energy(3), gradient(3, nat), sigma(3, 3), hl_gap
+   integer :: i
+   logical :: exitRun
+
+   call init(env)
+   call init(mol, at, xyz)
+
+   do i = 1, 3
+      call init(model, env, TSolvInput(solvent="water", alpb=.true., &
+         & kernel=gbKernel%p16, state=states(i)), 2)
+      call env%check(exitRun)
+      call check_(error, .not.exitRun)
+      if (allocated(error)) return
+
+      call check_(error, model%freeEnergyShift, ref_shifts(i), thr=thr)
+      if (allocated(error)) return
+
+      call newXTBCalculator(env, mol, calc, method=2)
+      call newWavefunction(env, mol, calc, chk)
+      call addSolvationModel(env, calc, TSolvInput(solvent="water", alpb=.true., &
+         & kernel=gbKernel%p16, state=states(i)))
+
+      energy(i) = 0.0_wp
+      gradient = 0.0_wp
+      call calc%singlepoint(env, mol, chk, 0, .false., energy(i), gradient, &
+         & sigma, hl_gap, res)
+      call env%check(exitRun)
+      call check_(error, .not.exitRun)
+      if (allocated(error)) return
+   end do
+
+   call check_(error, energy(2) - energy(1), ref_shifts(2) - ref_shifts(1), thr=thr)
+   if (allocated(error)) return
+   call check_(error, energy(3) - energy(2), ref_shifts(3) - ref_shifts(2), thr=thr)
+
+end subroutine test_gfn2_reference_state
 
 subroutine test_gfn2_pcem_api(error)
    use xtb_mctc_accuracy, only : wp
@@ -1057,6 +1230,7 @@ end subroutine test_gfn2_dmetal
 
 subroutine test_gfn2_mindless_cosmo(error)
    use xtb_mctc_accuracy, only : wp
+   use xtb_mctc_global, only : persistentEnv
    use xtb_test_molstock, only : getMolecule
 
    use xtb_type_molecule
@@ -1108,6 +1282,7 @@ subroutine test_gfn2_mindless_cosmo(error)
       & 0.315091487032_wp]
 
    call init(env)
+   persistentEnv%io%namespace = 'gfn2_cosmo'
    do iMol = 1, 10
 
       call getMolecule(mol, mindless(iMol))
@@ -1136,6 +1311,8 @@ subroutine test_gfn2_mindless_cosmo(error)
       call check_(error, hl_gap, ref_hlgaps(iMol), thr=thr)
 
    end do
+   call delete_file('xtb.cosmo')
+   deallocate(persistentEnv%io%namespace)
 end subroutine test_gfn2_mindless_cosmo
 
 subroutine test_gfn2_wbo(error)
@@ -1275,7 +1452,7 @@ subroutine test_gfn2_lmo_molden(error)
    character(len=1024) :: line1, line2
    logical :: exitRun
    logical :: exist_lmoinfo, exist_lmocent, exist_molden, exist_molden_lmo
-   logical :: pr_lmo_save, pr_molden_save
+   logical :: pr_lmo_save, pr_molden_save, pr_charges_save, pr_wiberg_save
    logical :: differ
    logical :: in_mo1, in_mo2
    
@@ -1295,8 +1472,12 @@ subroutine test_gfn2_lmo_molden(error)
    ! Mirror the command line with molden and lmo options
    pr_lmo_save = set%pr_lmo
    pr_molden_save = set%pr_molden_input
+   pr_charges_save = set%pr_charges
+   pr_wiberg_save = set%pr_wiberg
    set%pr_lmo = .true.
    set%pr_molden_input = .true.
+   set%pr_charges = .false.
+   set%pr_wiberg = .false.
 
    call calc%singlepoint(env, mol, chk, 2, .false., energy, gradient, sigma, &
       & hl_gap, res)
@@ -1311,6 +1492,8 @@ subroutine test_gfn2_lmo_molden(error)
 
    set%pr_lmo = pr_lmo_save
    set%pr_molden_input = pr_molden_save
+   set%pr_charges = pr_charges_save
+   set%pr_wiberg = pr_wiberg_save
 
    ! Check LMO classification results
    call check_(error, allocated(res%iff_results))
@@ -1377,10 +1560,62 @@ subroutine test_gfn2_lmo_molden(error)
 
    call delete_file('xtblmoinfo')
    call delete_file('lmocent.coord')
+   call delete_file('coordprot.0')
+   call delete_file('xtbscreen.xyz')
    call delete_file('molden.input')
    call delete_file('molden-lmo.input')
-   call delete_file('charges')
 
 end subroutine test_gfn2_lmo_molden
+
+
+subroutine test_gfn2_pbc3d(error)
+   use xtb_mctc_accuracy, only : wp
+   use xtb_type_molecule
+   use xtb_type_environment
+   use xtb_pbc_tools
+   use xtb_xtb_calculator, only : TxTBCalculator, newXTBCalculator
+
+   type(error_type), allocatable, intent(out) :: error
+
+   integer, parameter :: nat = 3
+   integer, parameter :: at(nat) = [9, 9, 20]
+   real(wp), parameter :: abc(3, nat) = reshape(&
+      &[0.25_wp, 0.25_wp, 0.25_wp, &
+      & 0.75_wp, 0.75_wp, 0.75_wp, &
+      & 0.00_wp, 0.00_wp, 0.00_wp], shape(abc))
+   real(wp), parameter :: lattice(3, 3) = reshape(&
+      &[5.9598811567890_wp, 2.1071361905157_wp, 3.6496669404404_wp, &
+      & 0.0000000000000_wp, 6.3214085715472_wp, 3.6496669404404_wp, &
+      & 0.0000000000000_wp, 0.0000000000000_wp, 7.2993338808807_wp], &
+      & shape(lattice))
+
+   type(TMolecule) :: mol
+   type(TEnvironment) :: env
+   type(TxTBCalculator) :: calc
+   real(wp), allocatable :: xyz(:, :)
+   logical :: exitRun
+   character(len=:), allocatable :: err_msg
+
+   call init(env)
+   allocate(xyz(3, nat))
+   call coord_trafo(nat, lattice, abc, xyz)
+   call init(mol, at, xyz, lattice=lattice)
+
+   call newXTBCalculator(env, mol, calc, 'param_gfn2-xtb.txt', 2)
+   call env%check(exitRun)
+   call check_(error, exitRun, .true.)
+   if (allocated(error)) return
+
+   call env%getLog(err_msg)
+   if (index(err_msg, "Native periodic GFN1-xTB and GFN2-xTB calculations are deprecated and unsupported") == 0) then
+      call test_failed(error, "Missing deprecation message for native periodic GFN2-xTB")
+      return
+   end if
+   if (index(err_msg, "--tblite") == 0) then
+      call test_failed(error, "Error message does not recommend --tblite")
+      return
+   end if
+
+end subroutine test_gfn2_pbc3d
 
 end module test_gfn2

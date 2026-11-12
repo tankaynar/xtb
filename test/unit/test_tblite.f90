@@ -50,7 +50,10 @@ subroutine collect_tblite(testsuite)
       new_unittest("mindless-efield", test_mindless_efield), &
       new_unittest("lmo-molden", test_lmo_molden), &
       new_unittest("lmo-spinpol", test_lmo_spinpol), &
-      new_unittest("lmo-no-occupied", test_lmo_no_occupied) &
+      new_unittest("lmo-no-occupied", test_lmo_no_occupied), &
+      new_unittest("gfn1-pbc", test_gfn1_pbc), &
+      new_unittest("gfn2-pbc", test_gfn2_pbc), &
+      new_unittest("reject-native-pbc", test_reject_native_pbc) &
       ]
 
 end subroutine collect_tblite
@@ -651,7 +654,7 @@ subroutine test_gfn1_mindless_ddx(error)
       & "mindless01", "mindless02", "mindless03"]
    character(len=*), parameter :: solv_model(3) = [&
       & "cosmo", "cpcm ", "pcm  "]
-   ! References use ddX v1.0.0 with lmax=6 and switching=1.
+   ! References use ddX v1.0.2 with lmax=6 and switching=1.
    real(wp), parameter :: ref_energies(3) = [&
       & -33.075720271033_wp, -26.878402440179_wp, -25.840886464606_wp]
    real(wp), parameter :: ref_gnorms(3) = [&
@@ -732,7 +735,7 @@ subroutine test_gfn2_mindless_ddx(error)
       & "mindless01", "mindless02", "mindless03"]
    character(len=*), parameter :: solv_model(3) = [&
       & "cosmo", "cpcm ", "pcm  "]
-   ! References use ddX v1.0.0 with lmax=6 and switching=1.
+   ! References use ddX v1.0.2 with lmax=6 and switching=1.
    real(wp), parameter :: ref_energies(3) = [&
       & -30.389981765099_wp, -24.114459414282_wp, -23.769434437075_wp]
    real(wp), parameter :: ref_gnorms(3) = [&
@@ -885,7 +888,7 @@ subroutine test_lmo_molden(error)
    real(wp) :: energy, sigma(3, 3)
    real(wp) :: hl_gap
    real(wp),allocatable :: gradient(:,:)
-   logical :: pr_lmo_save, pr_molden_save
+   logical :: pr_lmo_save, pr_molden_save, pr_charges_save, pr_wiberg_save
    logical :: exist_molden, exist_molden_lmo, differ
    integer :: unit1, unit2, stat1, stat2
    character(len=1024) :: line1, line2
@@ -909,8 +912,12 @@ subroutine test_lmo_molden(error)
    ! Mirror '--lmo --molden' on the command line
    pr_lmo_save = set%pr_lmo
    pr_molden_save = set%pr_molden_input
+   pr_charges_save = set%pr_charges
+   pr_wiberg_save = set%pr_wiberg
    set%pr_lmo = .true.
    set%pr_molden_input = .true.
+   set%pr_charges = .false.
+   set%pr_wiberg = .false.
 
    call calc%singlepoint(env, mol, chk, 2, .false., energy, gradient, sigma, &
       & hl_gap, res)
@@ -921,6 +928,8 @@ subroutine test_lmo_molden(error)
 
    set%pr_lmo = pr_lmo_save
    set%pr_molden_input = pr_molden_save
+   set%pr_charges = pr_charges_save
+   set%pr_wiberg = pr_wiberg_save
 
    ! The canonical and localized-MO Molden files both get written ...
    inquire(file='molden.input', exist=exist_molden)
@@ -973,9 +982,6 @@ subroutine test_lmo_molden(error)
 
    call delete_file('molden.input')
    call delete_file('molden-lmo.input')
-   call delete_file('charges')
-   call delete_file('wbo')
-   call delete_file('xtbtopo.mol')
    call delete_file('xtblmoinfo')
    call delete_file('lmocent.coord')
    call delete_file('coordprot.0')
@@ -1011,7 +1017,8 @@ subroutine test_lmo_spinpol(error)
 
    real(wp) :: energy, sigma(3, 3), hl_gap
    real(wp), allocatable :: gradient(:, :)
-   logical :: pr_lmo_save, pr_molden_save, exitRun, exist_lmoinfo
+   logical :: pr_lmo_save, pr_molden_save, pr_charges_save, pr_wiberg_save
+   logical :: exitRun, exist_lmoinfo
    logical :: exist_molden_lmo
    integer :: unit, stat, nalpha, nbeta
    character(len=1024) :: line
@@ -1038,8 +1045,12 @@ subroutine test_lmo_spinpol(error)
    ! Mirror '--lmo --molden' on the command line
    pr_lmo_save = set%pr_lmo
    pr_molden_save = set%pr_molden_input
+   pr_charges_save = set%pr_charges
+   pr_wiberg_save = set%pr_wiberg
    set%pr_lmo = .true.
    set%pr_molden_input = .true.
+   set%pr_charges = .false.
+   set%pr_wiberg = .false.
 
    call calc%singlepoint(env, mol, chk, 2, .false., energy, gradient, sigma, &
       & hl_gap, res)
@@ -1047,6 +1058,8 @@ subroutine test_lmo_spinpol(error)
 
    set%pr_lmo = pr_lmo_save
    set%pr_molden_input = pr_molden_save
+   set%pr_charges = pr_charges_save
+   set%pr_wiberg = pr_wiberg_save
 
    ! Skipping the classification only issues a warning
    call env%check(exitRun)
@@ -1082,9 +1095,6 @@ subroutine test_lmo_spinpol(error)
 
    call delete_file('molden.input')
    call delete_file('molden-lmo.input')
-   call delete_file('charges')
-   call delete_file('wbo')
-   call delete_file('xtbtopo.mol')
 
 end subroutine test_lmo_spinpol
 
@@ -1167,5 +1177,168 @@ subroutine test_lmo_no_occupied(error)
    if (allocated(error)) return
 
 end subroutine test_lmo_no_occupied
+
+
+subroutine setup_ammonia_pbc(mol)
+   use xtb_mctc_convert, only : aatoau
+   use xtb_type_molecule, only : TMolecule, init
+   type(TMolecule), intent(out) :: mol
+
+   integer, parameter :: nat = 16
+   integer, parameter :: at(nat) = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 7, 7, 7, 7]
+   real(wp), parameter :: lattice_aa(3, 3) = reshape([ &
+      & 5.0133599999999996_wp, 0.0_wp, 0.0_wp, &
+      & 0.0_wp, 5.0133599999999996_wp, 0.0_wp, &
+      & 0.0_wp, 0.0_wp, 5.0133599999999996_wp], [3, 3])
+   real(wp), parameter :: xyz_aa(3, nat) = reshape([ &
+      & 2.1985588943999996_wp, 1.7639005823999998_wp, 0.8801454815999999_wp, &
+      & 1.7639005823999998_wp, 0.8801454815999999_wp, 2.1985588943999996_wp, &
+      & 0.8801454815999999_wp, 2.1985588943999996_wp, 1.7639005823999998_wp, &
+      & 4.8411510839999998_wp, 1.6194155471999998_wp, 4.9398140088000000_wp, &
+      & 4.3563090384000001_wp, 2.4998116967999997_wp, 3.6324801215999996_wp, &
+      & 3.5195792543999995_wp, 1.1535741359999998_wp, 4.0840334567999994_wp, &
+      & 4.0840334567999994_wp, 3.5195792543999995_wp, 1.1535741359999998_wp, &
+      & 4.9398140088000000_wp, 4.8411510839999998_wp, 1.6194155471999998_wp, &
+      & 3.6324801215999996_wp, 4.3563090384000001_wp, 2.4998116967999997_wp, &
+      & 2.4998116967999997_wp, 3.6324801215999996_wp, 4.3563090384000001_wp, &
+      & 1.1535741359999998_wp, 4.0840334567999994_wp, 3.5195792543999995_wp, &
+      & 1.6194155471999998_wp, 4.9398140088000000_wp, 4.8411510839999998_wp, &
+      & 1.3746131783999997_wp, 1.3746131783999997_wp, 1.3746131783999997_wp, &
+      & 3.9981545999999994_wp, 1.9910559239999999_wp, 4.4636450759999997_wp, &
+      & 4.4636450759999997_wp, 3.9981545999999994_wp, 1.9910559239999999_wp, &
+      & 1.9910559239999999_wp, 4.4636450759999997_wp, 3.9981545999999994_wp], [3, nat])
+
+   call init(mol, at, xyz_aa * aatoau, lattice=lattice_aa * aatoau)
+end subroutine setup_ammonia_pbc
+
+
+subroutine test_gfn1_pbc(error)
+   use xtb_type_molecule, only : TMolecule
+   use xtb_type_restart, only : TRestart
+   use xtb_type_data, only : scc_results
+   use xtb_type_environment, only : TEnvironment, init
+
+   type(error_type), allocatable, intent(out) :: error
+   type(TMolecule) :: mol
+   type(TRestart) :: chk
+   type(TEnvironment) :: env
+   type(scc_results) :: res
+   type(TTBLiteCalculator) :: calc
+   real(wp) :: energy, sigma(3, 3), hl_gap
+   real(wp), allocatable :: gradient(:, :)
+   logical :: exitRun
+
+   if (.not.get_xtb_feature('tblite')) then
+      call skip_test(error, "xtb not compiled with tblite support")
+      return
+   end if
+
+   call init(env)
+   call setup_ammonia_pbc(mol)
+   allocate(gradient(3, mol%n))
+
+   call newTBLiteCalculator(env, mol, calc, TTBLiteInput(method="gfn1"))
+   call newTBLiteWavefunction(env, mol, calc, chk)
+   call calc%singlepoint(env, mol, chk, 0, .false., energy, gradient, sigma, &
+      & hl_gap, res)
+
+   call env%check(exitRun)
+   call check_(error, .not.exitRun)
+   if (allocated(error)) return
+
+   call check_(error, energy, -19.358837703807_wp, thr=thr)
+   if (allocated(error)) return
+   call check_(error, norm2(gradient), 0.081739426745_wp, thr=thrg)
+   if (allocated(error)) return
+   call check_(error, norm2(sigma) > 1.0e-3_wp, "Expected non-zero lattice stress tensor")
+end subroutine test_gfn1_pbc
+
+
+subroutine test_gfn2_pbc(error)
+   use xtb_type_molecule, only : TMolecule
+   use xtb_type_restart, only : TRestart
+   use xtb_type_data, only : scc_results
+   use xtb_type_environment, only : TEnvironment, init
+
+   type(error_type), allocatable, intent(out) :: error
+   type(TMolecule) :: mol
+   type(TRestart) :: chk
+   type(TEnvironment) :: env
+   type(scc_results) :: res
+   type(TTBLiteCalculator) :: calc
+   real(wp) :: energy, sigma(3, 3), hl_gap
+   real(wp), allocatable :: gradient(:, :)
+   logical :: exitRun
+
+   if (.not.get_xtb_feature('tblite')) then
+      call skip_test(error, "xtb not compiled with tblite support")
+      return
+   end if
+
+   call init(env)
+   call setup_ammonia_pbc(mol)
+   allocate(gradient(3, mol%n))
+
+   call newTBLiteCalculator(env, mol, calc, TTBLiteInput(method="gfn2"))
+   call newTBLiteWavefunction(env, mol, calc, chk)
+   call calc%singlepoint(env, mol, chk, 0, .false., energy, gradient, sigma, &
+      & hl_gap, res)
+
+   call env%check(exitRun)
+   call check_(error, .not.exitRun)
+   if (allocated(error)) return
+
+   call check_(error, energy, -17.727515583878_wp, thr=thr)
+   if (allocated(error)) return
+   call check_(error, norm2(gradient), 0.058756613867_wp, thr=thrg)
+   if (allocated(error)) return
+   call check_(error, norm2(sigma) > 1.0e-3_wp, "Expected non-zero lattice stress tensor")
+end subroutine test_gfn2_pbc
+
+
+subroutine test_reject_native_pbc(error)
+   use xtb_type_molecule, only : TMolecule
+   use xtb_type_environment, only : TEnvironment, init
+   use xtb_type_calculator, only : TCalculator
+   use xtb_main_setup, only : newCalculator
+   use xtb_setparam, only : set, p_ext_xtb
+
+   type(error_type), allocatable, intent(out) :: error
+   type(TMolecule) :: mol
+   type(TEnvironment) :: env
+   class(TCalculator), allocatable :: calc
+   logical :: exitRun
+   character(len=:), allocatable :: err_msg
+   integer :: mode_save, gfn_save, method
+
+   call setup_ammonia_pbc(mol)
+   mode_save = set%mode_extrun
+   gfn_save = set%gfn_method
+
+   do method = 1, 2
+      call init(env)
+      if (allocated(calc)) deallocate(calc)
+      set%mode_extrun = p_ext_xtb
+      set%gfn_method = method
+
+      call newCalculator(env, mol, calc, "", .false., 1.0_wp)
+      call env%check(exitRun)
+      call check_(error, exitRun, .true.)
+      if (allocated(error)) exit
+
+      call env%getLog(err_msg)
+      if (index(err_msg, "Native periodic GFN1-xTB and GFN2-xTB calculations are deprecated and unsupported") == 0) then
+         call test_failed(error, "Missing native periodic GFN1/GFN2 deprecation message")
+         exit
+      end if
+      if (index(err_msg, "--tblite") == 0) then
+         call test_failed(error, "Error message does not recommend --tblite")
+         exit
+      end if
+   end do
+
+   set%mode_extrun = mode_save
+   set%gfn_method = gfn_save
+end subroutine test_reject_native_pbc
 
 end module test_tblite

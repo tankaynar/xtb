@@ -78,9 +78,17 @@ add_executable(
 target_link_libraries(
   "${PROJECT_NAME}-tester"
   PRIVATE
-  "lib-${PROJECT_NAME}-static" # static xtb
+  "${PROJECT_NAME}::${PROJECT_NAME}"
   "test-drive::test-drive"     # testing framework
 )
+
+target_compile_definitions(
+  "${PROJECT_NAME}-tester"
+  PRIVATE "$<$<BOOL:${WITH_TBLITE}>:WITH_TBLITE>"
+)
+
+target_compile_options("${PROJECT_NAME}-tester" PRIVATE
+  "$<$<COMPILE_LANGUAGE:Fortran>:${xtb-fortran-options}>")
 
 if(NOT EXISTS "${CMAKE_CURRENT_BINARY_DIR}/include")
   file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/include")
@@ -101,11 +109,14 @@ foreach(t IN LISTS tests)
   ENVIRONMENT "XTBPATH=${PROJECT_SOURCE_DIR}"
   )
 endforeach()
-# run test suites writing/deleting the same LMO and Molden output files serially
+# run test suites writing/deleting the same LMO, Molden, COSMO, and charge files serially
 set_tests_properties(
+  "${PROJECT_NAME}/gfn1"
   "${PROJECT_NAME}/gfn2"
+  "${PROJECT_NAME}/gfnff"
   "${PROJECT_NAME}/iff"
   "${PROJECT_NAME}/tblite"
+  "${PROJECT_NAME}/cpx"
   PROPERTIES
   RESOURCE_LOCK "lmo-output-files"
 )
@@ -139,6 +150,18 @@ add_test("xtb/GFN2-xTB/GBSA" ${XTB-EXE} --coffee --gfn 2 --strict --gbsa h2o --n
 add_test("xtb/GFN2-FF" ${XTB-EXE} --coffee --gfnff --strict --norestart --namespace test6)
 add_test("xtb/GFN2-FF/xcontrol" ${XTB-EXE} --coffee --strict --norestart --namespace test7
   --input "${PROJECT_SOURCE_DIR}/test/inputs/gfnff.inp")
+add_test("xtb/Reject_native_periodic_GFN1" ${XTB-EXE}
+  "${PROJECT_SOURCE_DIR}/assets/inputs/vasp/ammonia.vasp" --gfn 1 --norestart --namespace pbc_native_gfn1)
+add_test("xtb/Reject_native_periodic_GFN2" ${XTB-EXE}
+  "${PROJECT_SOURCE_DIR}/assets/inputs/vasp/ammonia.vasp" --gfn 2 --norestart --namespace pbc_native_gfn2)
+
+set_tests_properties(
+  "xtb/Reject_native_periodic_GFN1"
+  "xtb/Reject_native_periodic_GFN2"
+  PROPERTIES
+  ENVIRONMENT XTBPATH=${PROJECT_SOURCE_DIR}
+  WILL_FAIL TRUE
+)
 
 set_tests_properties(
   "xtb/Singlepoint"

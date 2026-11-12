@@ -146,6 +146,7 @@ subroutine fire &
    use xtb_optimizer
    use xtb_axis
    use xtb_hessian
+   use xtb_freq_project, only : projectFixedAtoms, fixedAtomModes
    use xtb_lsrmsd
    use xtb_pbc_tools
 
@@ -235,6 +236,8 @@ subroutine fire &
 
    ! obtain the thresholds from the optlevel, possible optlevels are currently
    call get_optthr(mol%n,optlevel,opt%e_thr,opt%g_thr,maxcycle,opt%acc)
+   if (set%acc_set) opt%acc = set%acc
+   calc%accuracy = opt%acc
    ! check for user input regarding the maximum number of cycles
    if (maxstep > 0) maxcycle = maxstep
    ! deactivate microcyles (seems to be expensive with only small gains)
@@ -243,15 +246,22 @@ subroutine fire &
    nat3 = 3*mol%n
    nvar = nat3
    if(fixset%n.gt.0) then ! exact fixing
-      nvar=nat3-3*fixset%n-3
-      if(nvar.le.0) nvar=1
+      nvar=nat3-fixedAtomModes(mol,fixset%atoms(:fixset%n))
    endif
+
+   optcell = mol%npbc > 0 .and. set%optcell
+
+   ! all coordinates are fixed and no cell to relax, nothing to optimize
+   if (nvar == 0 .and. .not.optcell) then
+      if (printlevel > 0) write(env%unit,'(/,3x,a)') &
+         & "all atoms are fixed, skipping optimization"
+      return
+   end if
 
    allocate( velocities(3,mol%n), pmode(nvar,1), hessp(nat3*(nat3+1)/2), &
       &      xyzopt(3,mol%n), source = 0.0_wp )
    ! set defaults
    converged = .false.
-   optcell = mol%npbc > 0
    minpr = opt%printlevel > 0
    pr    = opt%printlevel > 1
    debug = opt%printlevel > 2
@@ -321,7 +331,7 @@ subroutine fire &
       call modhes(env,calc,set%mhset,molopt%n,molopt%xyz,molopt%at,hessp,pr)
       if(fixset%n.gt.0)then
          ! exact fixing
-         call trproj(molopt%n,molopt%n*3,molopt%xyz,hessp,.false.,-1,pmode,1)
+         call projectFixedAtoms(hessp,molopt,fixset%atoms(:fixset%n))
       else
          if (.not.mol%linear) &
          ! normal
@@ -377,6 +387,7 @@ subroutine fire &
 
    ! save optimized geometry
    call mol%copy(molopt)
+   call mol%update
 
    if (present(iter_needed)) then
       iter_needed = iter
@@ -419,6 +430,7 @@ subroutine l_ancopt &
    use xtb_optimizer
    use xtb_axis
    use xtb_hessian
+   use xtb_freq_project, only : projectFixedAtoms, fixedAtomModes
    use xtb_lsrmsd
    use xtb_detrotra, only : detrotra
 
@@ -521,6 +533,8 @@ subroutine l_ancopt &
 
    ! obtain the thresholds from the optlevel, possible optlevels are currently
    call get_optthr(mol%n,optlevel,opt%e_thr,opt%g_thr,maxcycle,opt%acc)
+   if (set%acc_set) opt%acc = set%acc
+   calc%accuracy = opt%acc
    ! check for user input regarding the maximum number of cycles
    if (maxcycle_in > 0) maxcycle = maxcycle_in
 
@@ -576,13 +590,19 @@ subroutine l_ancopt &
    ! determine degrees of freedom
    nat3 = 3 * mol%n
    if (fixset%n > 0) then ! exact fixing
-      nvar = nat3 - 3*fixset%n - 3
-      if (nvar <= 0) nvar = 1
+      nvar = nat3 - fixedAtomModes(mol, fixset%atoms(:fixset%n))
    else if (fragmented_hessian) then
       nvar = nat3
    else
       nvar = nat3 - 6
       if (linear) nvar = nat3 - 5
+   end if
+
+   ! all coordinates are fixed, nothing to optimize
+   if (nvar == 0) then
+      if (minpr) write(env%unit,'(/,3x,a)') &
+         & "all atoms are fixed, skipping optimization"
+      return
    end if
 
    allocate( hdiag(nvar), source = 0.0_wp )
@@ -625,7 +645,7 @@ subroutine l_ancopt &
 
    ! Project translation, rotation and fixed atoms
     if(fixset%n.gt.0)then
-        call trproj(molopt%n,nat3,molopt%xyz,hessp,.false., -1  ,pmode,1)     ! exact fixing
+        call projectFixedAtoms(hessp,molopt,fixset%atoms(:fixset%n))        ! exact fixing
     else
         if (.not.linear) &
         call trproj(molopt%n,nat3,molopt%xyz,hessp,.false.,0,pmode,1)     ! normal
@@ -669,7 +689,8 @@ subroutine l_ancopt &
       deallocate(aux)
    end select
 
-   if (.not. fragmented_hessian) then
+   ! with fixed atoms the null space is already projected exactly
+   if (.not. fragmented_hessian .and. fixset%n == 0) then
       call detrotra(linear, mol%n, mol%xyz, hess, eig)
    end if
 

@@ -90,8 +90,16 @@ NOTE: This data group refers to constraining the gradient by appling
     constrains all elements of the same type, the atom type is determined
     by the ordinal number or the element symbol
 *atoms*: 'list',...::
-     constrains the atom positions of all atoms in 'list'. Needs at
-     least two atoms since potential is applied on all atoms in 'list'.
+    constrains the atom positions of all atoms in 'list'. Needs at
+    least two atoms since potential is applied on all atoms in 'list'.
+*free*: 'list'|'symbol',...::
+    constrains the atom positions of all atoms except those in 'list'
+    and all atoms of the elements given by their element symbol.
+    Numbers always refer to atoms, not to atomic numbers.
+    Any other entry stops the run with an error.
+    Can be given multiple times, the free atoms of all entries are combined.
+    Can be combined with *atoms* and *elements*, atoms selected there
+    stay constrained. Needs at least two constrained atoms.
 *distance*: 'i','j',auto|'real'::
     constrain the distance between atom 'i' and 'j' to the actual 
     length (auto) or the value 'real', which has to be given in
@@ -163,7 +171,7 @@ $embedding
     Alternatively the 'gam' value can be given directly as fifth argument,
     to simulate point charges provide a huge value for 'gam'.
 
-*gradient*='file::
+*gradient*='file'::
     gradient of the point charges is written to 'file' (default: 'pcgrad')
 
 $external
@@ -209,6 +217,17 @@ NOTE: the fix group refers to exact fixing. For geometry optimizations
     This is automatically deactivated for molecular dynamics since
     it leads to instabilities.
 
+*free*: 'list'|'symbol',...::
+    fixes all atoms except those in 'list' and all atoms of the elements
+    given by their element symbol, i.e. only these atoms are optimized.
+    Numbers always refer to atoms, not to atomic numbers.
+    Any other entry stops the run with an error.
+    Can be given multiple times, the free atoms of all entries are combined.
+    Can be combined with *atoms* and *elements*, atoms selected there
+    stay fixed.
+    This is automatically deactivated for molecular dynamics since
+    it leads to instabilities.
+
 *freeze frequency*='real'::
     diagonal element used for freezing atoms in numerical Hessian calculation
 
@@ -221,8 +240,8 @@ NOTE: the fix group refers to exact fixing. For geometry optimizations
 $gbsa
 ~~~~~
 *solvent*='string'::
-    solvent for the generalized born (GB) model with solvent accessable
-    surface area (SASA), requires `.param_gbsa.solvent` in `XTBPATH`.
+    solvent for the generalized born (GB) model with solvent accessible
+    surface area (SASA).
     Does not activate GBSA (use commandline).
 
 *ion_st*='real'::
@@ -232,7 +251,7 @@ $gbsa
     ion radius for salt screening in GBSA
 
 *grid*='level'::
-    changes the grid used for the surface accessable surface area
+    changes the grid used for the solvent accessible surface area
     (normal, tight, vtight/verytight, extreme are available).
 
 $gfn
@@ -246,7 +265,9 @@ $gfn
 $hess
 ~~~~~
 *sccacc*='real'::
-    SCC accuracy level in Hessian runs
+    SCC accuracy level for displaced numerical Hessian evaluations (default: 0.2,
+    or the optimization level accuracy in ohess/bhess runs if tighter; overrides
+    --acc for the displaced Hessian evaluations)
 *step*='real'::
     Cartesian displacement increment for numerical Hessian
 *scale*='real'::
@@ -351,7 +372,7 @@ $oniom
    to print optimization log files for model region geometry (`high.inner_region.log` and `low.inner_region.log`)
 
 *derived k*='bool'::
-   to calculate prefactor *k* and create jacobian dynamically (see more )
+   to calculate prefactor *k* and create jacobian dynamically
 
 *ignore topo*='bool'::
    to bypass topology check when breaking bonds
@@ -365,13 +386,14 @@ $oniom
 $opt
 ~~~~
 *engine*='method'::
-    method can be 'rf' for ANCopt (default), 'lbfgs' for L-ANCopt or
-    'inertial' for FIRE.
+    method can be 'rf' for ANCopt (default for nonperiodic systems),
+    'lbfgs' for L-ANCopt, 'pbc_lbfgs' for periodic L-BFGS (default for
+    periodic systems), or 'inertial' for FIRE.
 
 *output*='file'::
     redirect output of optimization to 'file'
 
-*logfile*='file::
+*logfile*='file'::
     write optimization log to 'file' (default: xtbopt.log)
 
 *optlevel*='level'::
@@ -574,7 +596,7 @@ $wall
 *sandwich*: auto|'real',all|'list',...::
    set up a sandwich wall potential for all or the atoms in 'list'
    with the radius 'real' or an automatical determined sandwich radius in Bohr
-   Only potential=logfermi ist available. diameter=2*radius+2*4A safety buffer
+   Only potential=logfermi is available. diameter=2*radius+2*4A safety buffer
 
 
 $write
@@ -713,11 +735,14 @@ NOTE: `xtb(1)` can read a set-block by itself and will print out a
 BUGS
 ----
 Please report all bugs with an example input, `--copy` dump of internal settings
-and the used geometry, as well as the `--verbose` output to xtb@thch.uni-bonn.de
+and the used geometry, as well as the `--verbose` output on the issue tracker at
+https://github.com/grimme-lab/xtb/issues
 
 RESOURCES
 ---------
-Main web site: http://grimme.uni-bonn.de/software/xtb
+Main repository: https://github.com/grimme-lab/xtb
+
+Documentation: https://xtb-docs.readthedocs.io/
 
 COPYING
 -------
