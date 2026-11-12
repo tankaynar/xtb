@@ -5,7 +5,7 @@
 # The xtb sources are upstream's, unchanged (see molion/README.md); the libraries xtb's meson
 # wraps pin (tblite, dftd4, mctc-lib, multicharge, CPCM-X, ...) are built from those pins and
 # linked in statically. macOS and Linux use conda-forge's gfortran and OpenBLAS, as Molion's
-# xtb 6.7.1 did (Linux: glibc 2.17 or newer); Windows uses MSYS2's UCRT64 gfortran. Each
+# earlier builds did (Linux: glibc 2.17 or newer); Windows uses MSYS2's UCRT64 gfortran. Each
 # bundle is checked on its own (molion/check.sh): a water single point, and IF5 and XeF6, on
 # which 6.7.1's `--esp` aborts at random, ten runs each.
 #
